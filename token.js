@@ -1,44 +1,63 @@
-import express from 'express';
-import cors from 'cors';
-import crypto from 'crypto';
+const express = require("express");
+const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const tokenStore = new Map();
+// 토큰 저장소 (메모리 기반, Redis 등으로 교체 가능)
+const tokens = {};
 
-app.post('/create-token', (req, res) => {
-  const { bizid, userId } = req.body;
-  if (!bizid || !userId) {
-    return res.status(400).json({ error: 'Missing bizid or userId' });
+// ✅ 임시 토큰 생성 API
+app.post("/generate-token", (req, res) => {
+  const { userId, bizid } = req.body;
+
+  if (!userId || !bizid) {
+    return res.status(400).json({ error: "Missing userId or bizid" });
   }
 
-  const token = crypto.randomUUID();
-  const expires = Date.now() + 1000 * 60 * 2;
+  const token = uuidv4();
+  tokens[token] = {
+    userId,
+    bizid,
+    createdAt: Date.now()
+  };
 
-  tokenStore.set(token, { bizid, userId, expires });
   res.json({ token });
 });
 
-app.get('/verify-token/:token', (req, res) => {
-  const token = req.params.token;
-  const tokenData = tokenStore.get(token);
+// ✅ 토큰 검증 API
+app.post("/verify-token", (req, res) => {
+  const { token, userId, bizid } = req.body;
 
+  if (!token || !userId || !bizid) {
+    return res.send(JSON.stringify({ valid: false, error: "Missing data" }));
+  }
+
+  const tokenData = tokens[token];
   if (!tokenData) {
-    return res.status(404).json({ error: 'Invalid token' });
+    return res.send(JSON.stringify({ valid: false, error: "Invalid token" }));
   }
 
-  if (Date.now() > tokenData.expires) {
-    tokenStore.delete(token);
-    return res.status(410).json({ error: 'Expired token' });
+  const now = Date.now();
+  const isExpired = now - tokenData.createdAt > 2 * 60 * 1000; // 2분 제한
+
+  if (isExpired) {
+    delete tokens[token];
+    return res.send(JSON.stringify({ valid: false, error: "Token expired" }));
   }
 
-  tokenStore.delete(token);
-  res.json(tokenData);
+  if (tokenData.userId !== userId || tokenData.bizid !== bizid) {
+    return res.send(JSON.stringify({ valid: false, error: "Token mismatch" }));
+  }
+
+  delete tokens[token]; // ✅ 일회용 사용 후 제거
+  return res.send(JSON.stringify({ valid: true }));
 });
 
+// ✅ 서버 시작
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🔐 Token server running on port ${PORT}`);
+  console.log(`🎯 Token server running on port ${PORT}`);
 });
